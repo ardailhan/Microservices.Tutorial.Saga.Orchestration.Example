@@ -2,6 +2,8 @@ using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Order.API.Context;
 using Order.API.ViewModels;
+using Shared.OrderEvents;
+using Shared.Settings;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,7 +26,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapPost("/create-order", async (CreateOrderVM model, OrderDBContext context) =>
+app.MapPost("/create-order", async (CreateOrderVM model, OrderDBContext context,ISendEndpointProvider sendEndpointProvider) =>
 {
     Order.API.Models.Order order = new()
     {
@@ -41,6 +43,22 @@ app.MapPost("/create-order", async (CreateOrderVM model, OrderDBContext context)
     };
     await context.Orders.AddAsync(order);
     await context.SaveChangesAsync();
+
+    OrderStartedEvent orderStartedEvent = new()
+    {
+        BuyerId = model.BuyerId,
+        OrderId = order.Id,
+        TotalPrice = model.OrderItems.Sum(oi => oi.Count * oi.Price),
+        OrderItems = model.OrderItems.Select(oi => new Shared.Messages.OrderItemMessage
+        {
+            Price = oi.Price,
+            Count = oi.Count,
+            ProductId = oi.ProductId
+        }).ToList()
+    };
+
+    var sendEndpoint = await sendEndpointProvider.GetSendEndpoint(new Uri($"queue : {RabbitMQSettings.StateMachineQueue}"));
+    await sendEndpoint.Send<OrderStartedEvent>(orderStartedEvent);
 });
 
 app.Run();
