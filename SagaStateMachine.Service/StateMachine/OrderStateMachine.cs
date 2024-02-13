@@ -1,7 +1,9 @@
 ﻿using MassTransit;
 using SagaStateMachine.Service.StateInstances;
+using Shared.Messages;
 using Shared.OrderEvents;
 using Shared.PaymentEvents;
+using Shared.Settings;
 using Shared.StockEvents;
 
 namespace SagaStateMachine.Service.StateMachine
@@ -45,7 +47,55 @@ namespace SagaStateMachine.Service.StateMachine
                     context.Instance.BuyerId = context.Data.BuyerId;
                     context.Instance.TotalPrice = context.Data.TotalPrice;
                     context.Instance.CreatedDate = DateTime.UtcNow;
+                })
+                .TransitionTo(OrderCreated)
+                .Send(new Uri($"queue:{RabbitMQSettings.Stock_OrderCreatedEventQueue}"),
+                context => new OrderCreatedEvent(context.Instance.CorrelationId)
+                {
+                    OrderItems = context.Data.OrderItems
                 }));
+
+            During(OrderCreated,
+                When(StockReservedEvent)
+                .TransitionTo(StockReserved)
+                .Send(new Uri($"queue:{RabbitMQSettings.Payment_StartedEventQueue}"),
+                context => new PaymentStartedEvent(context.Instance.CorrelationId)
+                {
+                    TotalPrice = context.Instance.TotalPrice,
+                    OrderItems = context.Data.OrderItems
+                }),
+                When(StockNotReservedEvent)
+                .TransitionTo(StockNotReserved)
+                .Send(new Uri($"queue:{RabbitMQSettings.Order_OrderFailedEventQueue}"),
+                context => new OrderFailedEvent
+                {
+                    OrderId = context.Instance.OrderId,
+                    Message = context.Data.Message
+                }));
+
+            During(StockReserved,
+                When(PaymentCompletedEvent)
+                .Send(new Uri($"queue:{RabbitMQSettings.Order_OrderCompletedEventQueue}"),
+                context => new OrderCompletedEvent
+                {
+                    OrderId = context.Instance.OrderId
+                })
+                .Finalize(),
+                When(PaymentFailedEvent)
+                .TransitionTo(PaymentFailed)
+                .Send(new Uri($"queue:{RabbitMQSettings.Order_OrderFailedEventQueue}"),
+                context => new OrderFailedEvent
+                {
+                    OrderId = context.Instance.OrderId,
+                    Message = context.Data.Message
+                })
+                .Send(new Uri($"queue:{RabbitMQSettings.Stock_RollbackMessageQueue}"),
+                context => new StockRollbackMessage
+                {
+                    OrderItems = context.Data.OrderItems
+                }));
+
+            SetCompletedWhenFinalized();
         }
     }
 }
