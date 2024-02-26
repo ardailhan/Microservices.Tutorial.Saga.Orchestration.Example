@@ -364,3 +364,4 @@ FodyWeavers.xsd
 /Order.API/appsettings.json
 /Payment.API/appsettings.json
 /Stock.API/appsettings.json
+/SagaStateMachine.Service/appsettings.json
